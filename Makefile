@@ -1,4 +1,6 @@
 # Andrew Huang <bluedrum@163.com>
+# Copyright 2019 Elliott Mitchell <ehem+github@m5p.com>, Apache license
+
 ifeq ($(CC),cc)
 CC = gcc
 endif
@@ -11,7 +13,7 @@ EXE = .exe
 RM = del
 endif
 
-CFLAGS = -ffunction-sections -O3
+CFLAGS = -ffunction-sections -O3 -MMD -c -I. -Werror
 
 ifneq (,$(findstring darwin,$(CROSS_COMPILE)))
     UNAME_S := Darwin
@@ -24,7 +26,17 @@ else
     LDFLAGS += -Wl,--gc-sections -s
 endif
 
-all:mkbootimg$(EXE) unpackbootimg$(EXE)
+
+TARGETS := mkbootimg unpackbootimg
+
+mkbootimg_SRCS := mkbootimg.c
+mkbootimg_LIBS := mincrypt
+
+unpackbootimg_SRCS := unpackbootimg.c
+unpackbootimg_LIBS :=
+
+
+all: $(TARGETS:%=%$(EXE))
 
 static:
 	$(MAKE) LDFLAGS="$(LDFLAGS) -static"
@@ -32,20 +44,18 @@ static:
 libmincrypt.a:
 	$(MAKE) -C libmincrypt
 
-mkbootimg$(EXE):mkbootimg.o libmincrypt.a
-	$(CROSS_COMPILE)$(CC) -o $@ $^ -L. -lmincrypt $(LDFLAGS)
 
-mkbootimg.o:mkbootimg.c
-	$(CROSS_COMPILE)$(CC) -o $@ $(CFLAGS) -c $< -I. -Werror
-
-unpackbootimg$(EXE):unpackbootimg.o
-	$(CROSS_COMPILE)$(CC) -o $@ $^ $(LDFLAGS)
-
-unpackbootimg.o:unpackbootimg.c
-	$(CROSS_COMPILE)$(CC) -o $@ $(CFLAGS) -c $< -Werror
+%.o: %.c %.d Makefile
+	$(CROSS_COMPILE)$(CC) -o $@ $(CFLAGS) $<
 
 clean:
-	$(RM) mkbootimg unpackbootimg
-	$(RM) *.a *.~ *.exe *.o
+	$(RM) *.a *.~ *.o *.d $(TARGETS:%=%$(EXE))
 	$(MAKE) -C libmincrypt clean
 
+-include *.d
+
+.SECONDEXPANSION:
+
+# At end in order to limit secondary expansion to the least rules (speed)
+$(TARGETS:%=%$(EXE)): $$($$@_SRCS\:%.c=%.o) $$($$@_LIBS\:%=lib%.a)
+	$(CROSS_COMPILE)$(CC) -o $@ $($@_SRCS:%.c=%.o) -L. $($@_LIBS:%=-l%) $(LDFLAGS)
