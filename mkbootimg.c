@@ -15,6 +15,10 @@
 ** limitations under the License.
 */
 
+
+#define _GNU_SOURCE
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +31,78 @@
 #include "mincrypt/sha256.h"
 #include "bootimg.h"
 #include "params.h"
+
+
+enum hash_alg {
+    HASH_UNKNOWN = -1,
+    HASH_SHA1 = 0,
+    HASH_SHA256,
+};
+
+struct params {
+	boot_img_hdr_v1 hdr;
+
+	char *output_fn;
+	char *kernel_fn;
+	char *ramdisk_fn;
+	char *dt_fn;
+	char *second_fn;
+	char *recovery_dtbo_fn;
+
+	char *cmdline;
+	char *board;
+	uint32_t base;
+
+	enum hash_alg hash_alg;
+	bool get_id;
+};
+
+
+typedef int param_func(struct params *params, const char *opt, char *val,
+void *extra);
+
+static param_func parse_str, parse_uint;
+
+static param_func parse_os_version, parse_os_patch_level;
+
+static param_func parse_pagesize, parse_header_vers;
+
+static param_func parse_hash_alg, get_id_arg_func;
+
+
+extern struct params *fake_params_ptr;
+#define PARAMS_STR_IDX(arg) (void *)((char **)(&fake_params_ptr->arg)-(char **)fake_params_ptr)
+#define PARAMS_UINT_IDX(arg) (void *)((uint32_t *)(&fake_params_ptr->arg)-(uint32_t *)fake_params_ptr)
+
+struct param_entry {
+	const char *const name;
+	param_func *func;
+	void *extra;
+} options[]={
+	{BASE_OPT,	parse_uint,	PARAMS_UINT_IDX(base)},
+	{BOARD_OPT,	parse_str,	PARAMS_UINT_IDX(board)},
+	{CMDLINE_OPT,	parse_str,	PARAMS_STR_IDX(cmdline)},
+	{DT_OPT,	parse_str,	PARAMS_STR_IDX(dt_fn)},
+	{HASH_OPT,	parse_hash_alg,	NULL},
+	{HEADER_VERS_OPT, parse_header_vers, NULL},
+	{"id",		get_id_arg_func, NULL},
+	{KERNEL_OPT,	parse_str,	PARAMS_STR_IDX(kernel_fn)},
+	{KERNEL_OFF_OPT, parse_uint,	PARAMS_UINT_IDX(hdr.kernel_addr)},
+	{OS_PATCH_OPT,	parse_os_patch_level, NULL},
+	{OS_VER_OPT,	parse_os_version, NULL},
+	{"output",	parse_str,	PARAMS_STR_IDX(output_fn)},
+	{PAGE_OPT,	parse_pagesize,	NULL},
+	{RAMDISK_OPT,	parse_str,	PARAMS_STR_IDX(ramdisk_fn)},
+	{RAMDISK_OFF_OPT, parse_uint,	PARAMS_UINT_IDX(hdr.ramdisk_addr)},
+	{RECOVERY_DT_OPT, parse_str,	PARAMS_STR_IDX(recovery_dtbo_fn)},
+	{SECOND_OPT,	parse_str,	PARAMS_STR_IDX(second_fn)},
+	{SECOND_OFF_OPT, parse_uint,	PARAMS_UINT_IDX(hdr.second_addr)},
+	{TAGS_OFF_OPT,	parse_uint,	PARAMS_UINT_IDX(hdr.tags_addr)},
+};
+
+#undef PARAMS_STR_IDX
+#undef PARAMS_UINT_IDX
+
 
 static int load_file(const char *const usage, const char *const fn,
 uint32_t *_sz, void **_data)
@@ -137,36 +213,117 @@ int write_padded(int fd, unsigned pagesize, const void *buf, size_t itemsize)
     return itemsize;
 }
 
-int parse_os_version(char *ver)
+
+/* generic string accepting function */
+static int parse_str(struct params *_params, const char *opt, char *val,
+void *extra)
+{
+	char **params=(char **)_params;
+	intptr_t index=(intptr_t)extra;
+
+	if(!val) return -1; /* indicates no argument */
+
+	params[index]=val;
+
+	return 2;
+}
+
+
+/* generic uint32 accepting function */
+static int parse_uint(struct params *_params, const char *opt, char *val,
+void *extra)
+{
+	uint32_t *params=(uint32_t *)_params;
+	intptr_t index=(intptr_t)extra;
+
+	if(!val||!val[0]) return -1; /* indicates no argument */
+
+	errno=0;
+
+	params[index]=strtoul(val, 0, 16);
+
+	if(errno) return -errno;
+
+	return 2;
+}
+
+
+static int parse_pagesize(struct params *params, const char *opt, char *val,
+void *extra)
+{
+	uint32_t pagesize;
+
+	if(!val||!val[0]) return -1; /* indicates no argument */
+
+	errno=0;
+
+	pagesize = strtoul(val, 0, 10);
+
+	if(errno) return -errno;
+
+	if ((pagesize & (pagesize-1)) || (pagesize < (1<<11))) {
+		fprintf(stderr,"error: unsupported page size %d\n", pagesize);
+		return -1;
+	}
+
+	params->hdr.page_size=pagesize;
+
+	return 2;
+}
+
+
+static int parse_os_version(struct params *params, const char *opt, char *ver,
+void *extra)
 {
     unsigned int a, b = 0, c = 0;
     int i;
 
+    if(!ver||!ver[0]) return -1; /* indicates no argument */
+
     i = sscanf(ver, "%u.%u.%u", &a, &b, &c);
 
-    if((i >= 1) && (a < 128) && (b < 128) && (c < 128))
-        return (a << 14) | (b << 7) | c;
-    return 0;
+    params->hdr.os_version &= 0x7FFUL;
+    if((i < 1) || (a >= 128) || (b >= 128) || (c >= 128))
+        return -1;
+
+    params->hdr.os_version |= (a << 25) | (b << 18) | (c << 11);
+    return 2;
 }
 
-int parse_os_patch_level(char *lvl)
+static int parse_os_patch_level(struct params *params, const char *opt,
+char *lvl, void *extra)
 {
     unsigned int y, m;
     int i;
 
+    if(!lvl||!lvl[0]) return -1; /* indicates no argument */
+
     i = sscanf(lvl, "%u-%u", &y, &m);
     y -= 2000;
 
-    if((i == 2) && (y < 128) && (m > 0) && (m <= 12))
-        return (y << 4) | m;
-    return 0;
+    params->hdr.os_version &= ~0x7FFUL;
+    if((i != 2) || (y >= 128) || (m <= 0) || (m > 12))
+        return -1;
+
+    params->hdr.os_version |= (y << 4) | m;
+    return 2;
 }
 
-enum hash_alg {
-    HASH_UNKNOWN = -1,
-    HASH_SHA1 = 0,
-    HASH_SHA256,
-};
+
+static int parse_header_vers(struct params *params, const char *opt, char *val,
+void *extra)
+{
+	if(!val||!val[0]) return -1; /* indicates no argument */
+
+	errno=0;
+
+	params->hdr.header_version=strtoul(val, 0, 10);
+
+	if(errno) return -errno;
+
+	return 2;
+}
+
 
 struct hash_name {
     const char *name;
@@ -179,18 +336,32 @@ const struct hash_name hash_names[] = {
     { NULL, /* Sentinel */ },
 };
 
-enum hash_alg parse_hash_alg(char *name)
+static int parse_hash_alg(struct params *params, const char *opt, char *name,
+void *extra)
 {
     const struct hash_name *ptr = hash_names;
 
+    if(!name||!name[0]) return -1; /* indicates no argument */
+
     while(ptr->name) {
-        if(!strcmp(ptr->name, name))
-            return ptr->alg;
+        if(!strcmp(ptr->name, name)) {
+            params->hash_alg = ptr->alg;
+            return 2;
+        }
         ptr++;
     }
 
-    return HASH_UNKNOWN;
+    return -1;
 }
+
+
+static int get_id_arg_func(struct params *params, const char *opt, char *val,
+void *extra)
+{
+	params->get_id=true;
+	return 1; /* we don't take an argument, someone else can have it */
+}
+
 
 void generate_id_sha1(boot_img_hdr_v1 *hdr, void *kernel_data, void *ramdisk_data,
                       void *second_data, void *dt_data, void *recovery_dtbo_data)
@@ -258,7 +429,10 @@ void generate_id(enum hash_alg alg, boot_img_hdr_v1 *hdr, void *kernel_data,
 
 int main(int argc, char **argv)
 {
+    struct params params;
     boot_img_hdr_v1 hdr;
+
+    memset(&params, 0, sizeof(params));
 
     char *kernel_fn = NULL;
     void *kernel_data = NULL;
@@ -269,20 +443,28 @@ int main(int argc, char **argv)
     char *recovery_dtbo_fn = NULL;
     void *recovery_dtbo_data = NULL;
     char *cmdline = "";
+    params.cmdline = "";
     char *bootimg = NULL;
     char *board = "";
+    params.board = "";
     int os_version = 0;
     int os_patch_level = 0;
     int header_version = 0;
     char *dt_fn = NULL;
     void *dt_data = NULL;
     uint32_t pagesize = 2048;
+    params.hdr.page_size = 2048;
     int fd;
     uint32_t base           = 0x10000000U;
+    params.base             = 0x10000000U;
     uint32_t kernel_offset  = 0x00008000U;
+    params.hdr.kernel_addr  = 0x00008000U;
     uint32_t ramdisk_offset = 0x01000000U;
+    params.hdr.ramdisk_addr = 0x01000000U;
     uint32_t second_offset  = 0x00f00000U;
+    params.hdr.second_addr  = 0x00f00000U;
     uint32_t tags_offset    = 0x00000100U;
+    params.hdr.tags_addr    = 0x00000100U;
     uint32_t kernel_sz      = 0;
     uint32_t ramdisk_sz     = 0;
     uint32_t second_sz      = 0;
@@ -294,6 +476,7 @@ int main(int argc, char **argv)
 
     size_t cmdlen;
     enum hash_alg hash_alg = HASH_SHA1;
+    params.hash_alg = HASH_SHA1;
 
     argc--;
     argv++;
@@ -303,6 +486,40 @@ int main(int argc, char **argv)
     bool get_id = false;
     while(argc > 0){
         char *arg = argv[0];
+
+        if(strncmp("--", arg, 2)) {
+            if(arg[1]=='o'&&arg[2]==0&&argc>=2) {
+                params.output_fn=argv[1];
+                argc-=2;
+                argv+=2;
+            } else return usage();
+        } else {
+            unsigned lo=0, hi=sizeof(options)/sizeof(options[0]), mid;
+            int res;
+            int l;
+            char *val;
+            val=strchrnul(arg+2, '=');
+            l=val-arg-2;
+            if(val) ++val;
+            else if(argc>=2) val=argv[1];
+            else val=NULL;
+
+            while(mid=(hi+lo)/2, (res=strncmp(arg+2, options[mid].name, l))||options[mid].name[l]) {
+                if(res<=0) hi=mid;
+                else lo=mid+1;
+                if(lo==hi) return usage();
+            }
+
+            l=options[mid].func(&params, options[mid].name, val, options[mid].extra);
+            if(l<0) return usage();
+
+            l=(l==2)&&(val==argv[1])?2:1;
+            argc-=l;
+            argv+=l;
+        }
+
+
+#if 0
         if(!strcmp(arg, "--id")) {
             get_id = true;
             argc -= 1;
@@ -361,6 +578,7 @@ int main(int argc, char **argv)
         } else {
             return usage();
         }
+#endif
     }
     hdr.page_size = pagesize;
 
@@ -368,6 +586,11 @@ int main(int argc, char **argv)
     hdr.ramdisk_addr = base + ramdisk_offset;
     hdr.second_addr =  base + second_offset;
     hdr.tags_addr =    base + tags_offset;
+
+    params.hdr.kernel_addr += params.base;
+    params.hdr.ramdisk_addr += params.base;
+    params.hdr.second_addr += params.base;
+    params.hdr.tags_addr += params.base;
 
     hdr.os_version = (os_version << 11) | os_patch_level;
     hdr.header_version = header_version;
