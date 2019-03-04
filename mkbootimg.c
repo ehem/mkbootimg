@@ -337,10 +337,7 @@ int main(int argc, char **argv)
                 board = val;
             } else if(!strcmp(arg,"--" PAGE_OPT)) {
                 pagesize = strtoul(val, 0, 10);
-                if ((pagesize != 2048) && (pagesize != 4096)
-                    && (pagesize != 8192) && (pagesize != 16384)
-                    && (pagesize != 32768) && (pagesize != 65536)
-                    && (pagesize != 131072)) {
+                if ((pagesize & (pagesize-1)) || (pagesize < (1<<11))) {
                     fprintf(stderr,"error: unsupported page size %d\n", pagesize);
                     return -1;
                 }
