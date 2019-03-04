@@ -74,7 +74,7 @@ int usage(void)
             "       [ --second_offset <base offset> ]\n"
             "       [ --tags_offset <base offset> ]\n"
             "       [ --os_version <A.B.C version> ]\n"
-            "       [ --os_patch_level <YYYY-MM-DD date> ]\n"
+            "       [ --os_patch_level <YYYY-MM date> ]\n"
             "       [ --header_version <version number> ]\n"
             "       [ --hash <sha1(default)|sha256> ]\n"
             "       [ --id ]\n"
