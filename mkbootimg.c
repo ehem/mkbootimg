@@ -26,6 +26,7 @@
 #include "mincrypt/sha.h"
 #include "mincrypt/sha256.h"
 #include "bootimg.h"
+#include "params.h"
 
 static void *load_file(const char *fn, unsigned *_sz)
 {
@@ -60,23 +61,23 @@ oops:
 int usage(void)
 {
     fprintf(stderr,"usage: mkbootimg\n"
-            "       --kernel <filename>\n"
-            "       [ --ramdisk <filename> ]\n"
-            "       [ --second <2ndbootloader-filename> ]\n"
-            "       [ --recovery_dtbo <recoverydtbo-filename> ]\n"
-            "       [ --cmdline <kernel-commandline> ]\n"
-            "       [ --board <boardname> ]\n"
-            "       [ --base <address> ]\n"
-            "       [ --pagesize <pagesize> ]\n"
-            "       [ --dt <dtb-filename> ]\n"
-            "       [ --kernel_offset <base offset> ]\n"
-            "       [ --ramdisk_offset <base offset> ]\n"
-            "       [ --second_offset <base offset> ]\n"
-            "       [ --tags_offset <base offset> ]\n"
-            "       [ --os_version <A.B.C version> ]\n"
-            "       [ --os_patch_level <YYYY-MM date> ]\n"
-            "       [ --header_version <version number> ]\n"
-            "       [ --hash <sha1(default)|sha256> ]\n"
+            "       --" KERNEL_OPT " <filename>\n"
+            "       [ --" RAMDISK_OPT " <filename> ]\n"
+            "       [ --" SECOND_OPT " <2ndbootloader-filename> ]\n"
+            "       [ --" RECOVERY_DT_OPT " <recoverydtbo-filename> ]\n"
+            "       [ --" CMDLINE_OPT " <kernel-commandline> ]\n"
+            "       [ --" BOARD_OPT " <boardname> ]\n"
+            "       [ --" BASE_OPT " <address> ]\n"
+            "       [ --" PAGE_OPT " <pagesize> ]\n"
+            "       [ --" DT_OPT " <dtb-filename> ]\n"
+            "       [ --" KERNEL_OFF_OPT " <base offset> ]\n"
+            "       [ --" RAMDISK_OFF_OPT " <base offset> ]\n"
+            "       [ --" SECOND_OFF_OPT " <base offset> ]\n"
+            "       [ --" TAGS_OFF_OPT " <base offset> ]\n"
+            "       [ --" OS_VER_OPT " <A.B.C version> ]\n"
+            "       [ --" OS_PATCH_OPT " <YYYY-MM date> ]\n"
+            "       [ --" HEADER_VERS_OPT " <version number> ]\n"
+            "       [ --" HASH_OPT " <sha1(default)|sha256> ]\n"
             "       [ --id ]\n"
             "       -o|--output <filename>\n"
             );
@@ -304,29 +305,29 @@ int main(int argc, char **argv)
             argv += 2;
             if(!strcmp(arg, "--output") || !strcmp(arg, "-o")) {
                 bootimg = val;
-            } else if(!strcmp(arg, "--kernel")) {
+            } else if(!strcmp(arg, "--" KERNEL_OPT)) {
                 kernel_fn = val;
-            } else if(!strcmp(arg, "--ramdisk")) {
+            } else if(!strcmp(arg, "--" RAMDISK_OPT)) {
                 ramdisk_fn = val;
-            } else if(!strcmp(arg, "--second")) {
+            } else if(!strcmp(arg, "--" SECOND_OPT)) {
                 second_fn = val;
-            } else if(!strcmp(arg, "--recovery_dtbo")) {
+            } else if(!strcmp(arg, "--" RECOVERY_DT_OPT)) {
                 recovery_dtbo_fn = val;
-            } else if(!strcmp(arg, "--cmdline")) {
+            } else if(!strcmp(arg, "--" CMDLINE_OPT)) {
                 cmdline = val;
-            } else if(!strcmp(arg, "--base")) {
+            } else if(!strcmp(arg, "--" BASE_OPT)) {
                 base = strtoul(val, 0, 16);
-            } else if(!strcmp(arg, "--kernel_offset")) {
+            } else if(!strcmp(arg, "--" KERNEL_OFF_OPT)) {
                 kernel_offset = strtoul(val, 0, 16);
-            } else if(!strcmp(arg, "--ramdisk_offset")) {
+            } else if(!strcmp(arg, "--" RAMDISK_OFF_OPT)) {
                 ramdisk_offset = strtoul(val, 0, 16);
-            } else if(!strcmp(arg, "--second_offset")) {
+            } else if(!strcmp(arg, "--" SECOND_OFF_OPT)) {
                 second_offset = strtoul(val, 0, 16);
-            } else if(!strcmp(arg, "--tags_offset")) {
+            } else if(!strcmp(arg, "--" TAGS_OFF_OPT)) {
                 tags_offset = strtoul(val, 0, 16);
-            } else if(!strcmp(arg, "--board")) {
+            } else if(!strcmp(arg, "--" BOARD_OPT)) {
                 board = val;
-            } else if(!strcmp(arg,"--pagesize")) {
+            } else if(!strcmp(arg,"--" PAGE_OPT)) {
                 pagesize = strtoul(val, 0, 10);
                 if ((pagesize != 2048) && (pagesize != 4096)
                     && (pagesize != 8192) && (pagesize != 16384)
@@ -335,15 +336,15 @@ int main(int argc, char **argv)
                     fprintf(stderr,"error: unsupported page size %d\n", pagesize);
                     return -1;
                 }
-            } else if(!strcmp(arg, "--dt")) {
+            } else if(!strcmp(arg, "--" DT_OPT)) {
                 dt_fn = val;
-            } else if(!strcmp(arg, "--os_version")) {
+            } else if(!strcmp(arg, "--" OS_VER_OPT)) {
                 os_version = parse_os_version(val);
-            } else if(!strcmp(arg, "--os_patch_level")) {
+            } else if(!strcmp(arg, "--" OS_PATCH_OPT)) {
                 os_patch_level = parse_os_patch_level(val);
-            } else if(!strcmp(arg, "--header_version")) {
+            } else if(!strcmp(arg, "--" HEADER_VERS_OPT)) {
                 header_version = strtoul(val, 0, 10);
-            } else if(!strcmp(arg, "--hash")) {
+            } else if(!strcmp(arg, "--" HASH_OPT)) {
                 hash_alg = parse_hash_alg(val);
                 if (hash_alg == HASH_UNKNOWN) {
                     fprintf(stderr, "error: unknown hash algorithm '%s'\n", val);

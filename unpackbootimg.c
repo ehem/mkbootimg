@@ -12,6 +12,7 @@
 
 #include "mincrypt/sha.h"
 #include "bootimg.h"
+#include "params.h"
 
 typedef unsigned char byte;
 
@@ -195,7 +196,7 @@ int main(int argc, char** argv)
 
     //printf("cmdline...\n");
     sprintf(tmp, "%s/%s", directory, basename(filename));
-    strcat(tmp, "-cmdline");
+    strcat(tmp, "-" CMDLINE_OPT);
     char cmdlinetmp[BOOT_ARGS_SIZE+BOOT_EXTRA_ARGS_SIZE+1];
     sprintf(cmdlinetmp, "%.*s%.*s", BOOT_ARGS_SIZE, header.cmdline, BOOT_EXTRA_ARGS_SIZE, header.extra_cmdline);
     cmdlinetmp[BOOT_ARGS_SIZE+BOOT_EXTRA_ARGS_SIZE]='\0';
@@ -203,71 +204,71 @@ int main(int argc, char** argv)
 
     //printf("board...\n");
     sprintf(tmp, "%s/%s", directory, basename(filename));
-    strcat(tmp, "-board");
+    strcat(tmp, "-" BOARD_OPT);
     write_string_to_file(tmp, (char *)header.name);
 
     //printf("base...\n");
     sprintf(tmp, "%s/%s", directory, basename(filename));
-    strcat(tmp, "-base");
+    strcat(tmp, "-" BASE_OPT);
     char basetmp[200];
     sprintf(basetmp, "%08x", base);
     write_string_to_file(tmp, basetmp);
 
     //printf("pagesize...\n");
     sprintf(tmp, "%s/%s", directory, basename(filename));
-    strcat(tmp, "-pagesize");
+    strcat(tmp, "-" PAGE_OPT);
     char pagesizetmp[200];
     sprintf(pagesizetmp, "%d", header.page_size);
     write_string_to_file(tmp, pagesizetmp);
 
-    //printf("kerneloff...\n");
+    //printf("kernel_offset...\n");
     sprintf(tmp, "%s/%s", directory, basename(filename));
-    strcat(tmp, "-kerneloff");
+    strcat(tmp, "-" KERNEL_OFF_OPT);
     char kernelofftmp[200];
     sprintf(kernelofftmp, "%08x", header.kernel_addr - base);
     write_string_to_file(tmp, kernelofftmp);
 
-    //printf("ramdiskoff...\n");
+    //printf("ramdisk_offset...\n");
     sprintf(tmp, "%s/%s", directory, basename(filename));
-    strcat(tmp, "-ramdiskoff");
+    strcat(tmp, "-" RAMDISK_OFF_OPT);
     char ramdiskofftmp[200];
     sprintf(ramdiskofftmp, "%08x", header.ramdisk_addr - base);
     write_string_to_file(tmp, ramdiskofftmp);
 
-    //printf("secondoff...\n");
+    //printf("second_offset...\n");
     sprintf(tmp, "%s/%s", directory, basename(filename));
-    strcat(tmp, "-secondoff");
+    strcat(tmp, "-" SECOND_OFF_OPT);
     char secondofftmp[200];
     sprintf(secondofftmp, "%08x", header.second_addr - base);
     write_string_to_file(tmp, secondofftmp);
 
-    //printf("tagsoff...\n");
+    //printf("tags_offset...\n");
     sprintf(tmp, "%s/%s", directory, basename(filename));
-    strcat(tmp, "-tagsoff");
+    strcat(tmp, "-" TAGS_OFF_OPT);
     char tagsofftmp[200];
     sprintf(tagsofftmp, "%08x", header.tags_addr - base);
     write_string_to_file(tmp, tagsofftmp);
 
     if (header.os_version != 0) {
-        //printf("osversion...\n");
+        //printf("os_version...\n");
         sprintf(tmp, "%s/%s", directory, basename(filename));
-        strcat(tmp, "-osversion");
+        strcat(tmp, "-" OS_VER_OPT);
         char osvertmp[200];
         sprintf(osvertmp, "%d.%d.%d", a, b, c);
         write_string_to_file(tmp, osvertmp);
 
-        //printf("oslevel...\n");
+        //printf("os_patch_level...\n");
         sprintf(tmp, "%s/%s", directory, basename(filename));
-        strcat(tmp, "-oslevel");
+        strcat(tmp, "-" OS_PATCH_OPT);
         char oslvltmp[200];
         sprintf(oslvltmp, "%d-%02d", y, m);
         write_string_to_file(tmp, oslvltmp);
     }
 
     if (header.dt_size < hdr_ver_max) {
-        //printf("headerversion...\n");
+        //printf("header_version...\n");
         sprintf(tmp, "%s/%s", directory, basename(filename));
-        strcat(tmp, "-headerversion");
+        strcat(tmp, "-" HEADER_VERS_OPT);
         char hdrvertmp[200];
         sprintf(hdrvertmp, "%d\n", header.header_version);
         write_string_to_file(tmp, hdrvertmp);
@@ -275,7 +276,7 @@ int main(int argc, char** argv)
 
     //printf("hash...\n");
     sprintf(tmp, "%s/%s", directory, basename(filename));
-    strcat(tmp, "-hash");
+    strcat(tmp, "-" HASH_OPT);
     const char *hashtype = detect_hash_type(&header);
     write_string_to_file(tmp, hashtype);
 
@@ -311,7 +312,7 @@ int main(int argc, char** argv)
 
     if (header.second_size > 0) {
         sprintf(tmp, "%s/%s", directory, basename(filename));
-        strcat(tmp, "-second");
+        strcat(tmp, "-" SECOND_OPT);
         FILE *s = fopen(tmp, "wb");
         byte* second = (byte*)malloc(header.second_size);
         //printf("Reading second...\n");
@@ -326,7 +327,7 @@ int main(int argc, char** argv)
 
     if (header.dt_size > hdr_ver_max) {
         sprintf(tmp, "%s/%s", directory, basename(filename));
-        strcat(tmp, "-dtb");
+        strcat(tmp, "-" DT_OPT);
         FILE *d = fopen(tmp, "wb");
         byte* dtb = (byte*)malloc(header.dt_size);
         //printf("Reading dtb...\n");
@@ -336,7 +337,7 @@ int main(int argc, char** argv)
         fclose(d);
     } else if (header.recovery_dtbo_size != 0) {
         sprintf(tmp, "%s/%s", directory, basename(filename));
-        strcat(tmp, "-recoverydtbo");
+        strcat(tmp, "-" RECOVERY_DT_OPT);
         FILE *o = fopen(tmp, "wb");
         byte* dtbo = (byte*)malloc(header.recovery_dtbo_size);
         //printf("Reading recoverydtbo...\n");
