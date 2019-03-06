@@ -28,6 +28,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <ctype.h>
 
 #include "mincrypt/sha.h"
 #include "mincrypt/sha256.h"
@@ -61,7 +62,9 @@ struct params {
 typedef int param_func(struct params *params, const char *opt, char *val,
 void *extra);
 
-static param_func parse_str, parse_uint;
+static param_func parse_params;
+
+static param_func parse_str, parse_uint, parse_nop;
 
 static param_func parse_os_version, parse_os_patch_level;
 
@@ -83,6 +86,7 @@ struct param_entry {
 	{BOARD_OPT,	parse_board,	NULL},
 	{CMDLINE_OPT,	parse_cmdline,	NULL},
 	{DT_OPT,	parse_str,	PARAMS_STR_IDX(dt_fn)},
+	{"format",	parse_nop,	NULL},
 	{HASH_OPT,	parse_hash_alg,	NULL},
 	{HEADER_VERS_OPT, parse_header_vers, NULL},
 	{"id",		get_id_arg_func, NULL},
@@ -92,6 +96,7 @@ struct param_entry {
 	{OS_VER_OPT,	parse_os_version, NULL},
 	{"output",	parse_str,	PARAMS_STR_IDX(output_fn)},
 	{PAGE_OPT,	parse_pagesize,	NULL},
+	{PARAMS_OPT,	parse_params,	NULL},
 	{RAMDISK_OPT,	parse_str,	PARAMS_STR_IDX(ramdisk_fn)},
 	{RAMDISK_OFF_OPT, parse_uint,	PARAMS_UINT_IDX(hdr.ramdisk_addr)},
 	{RECOVERY_DT_OPT, parse_str,	PARAMS_STR_IDX(recovery_dtbo_fn)},
@@ -159,6 +164,7 @@ int usage(void)
             "       [ --" PAGE_OPT " <pagesize> ]\n"
             "       [ --" DT_OPT " <dtb-filename> ]\n"
             "       [ --" KERNEL_OFF_OPT " <base offset> ]\n"
+            "       [ --" PARAMS_OPT " <parameter filename> ]\n"
             "       [ --" RAMDISK_OFF_OPT " <base offset> ]\n"
             "       [ --" SECOND_OFF_OPT " <base offset> ]\n"
             "       [ --" TAGS_OFF_OPT " <base offset> ]\n"
@@ -216,6 +222,132 @@ size_t itemsize)
 }
 
 
+/* handler for params files which contain parameters mixed together */
+static int parse_params(struct params *params, const char *ign, char *filename,
+void *extra)
+{
+#define BUFSZ 4096
+	int len;
+	FILE *file;
+	char *buf=NULL, *bufcur;
+	size_t bufcnt=0;
+	char *target;
+	char sep;
+	char *opt, *val;
+
+	if(!filename[0]) return -1; /* indicates no argument */
+
+	if((len=open(filename, O_RDONLY|O_LARGEFILE))<0) {
+		fprintf(stderr, "Failed to open parameter file \"%s\": %s\n\n", filename, strerror(errno));
+		return -1;
+	}
+
+	if(!(buf=malloc(BUFSZ))) return -1;
+
+	if((bufcnt=read(len, buf, BUFSZ))<0) goto fail;
+
+	lseek(len, 0, SEEK_SET);
+
+	target=memmem(buf, bufcnt, "format", 6);
+
+	if(!target) goto fail;
+	target+=6;
+	while(isblank(*target)) ++target;
+	if(*target++!='=') goto fail;
+	while(isblank(*target)) ++target;
+
+	if(!strncasecmp(target, "binary", 6)) {
+		file=fdopen(len, "rb");
+
+		sep='\0';
+	} else if(!strncasecmp(target, "text", 4)) {
+		file=fdopen(len, "rt");
+
+		sep='\n';
+	} else goto fail;
+
+	if(!file) { /* rather unexpected */
+		fprintf(stderr, "fdopen() failed: %s\n", strerror(errno));
+		goto fail;
+	}
+
+	bufcnt=0;
+	bufcur=buf+BUFSZ;
+#define SKIP(ch) ((isspace(ch)||(ch)==sep))
+	do {
+		unsigned lo=0, hi=sizeof(options)/sizeof(options[0]), mid;
+		int res;
+
+		memmove(buf, bufcur, bufcnt);
+
+		bufcnt+=fread(buf+bufcnt, 1, BUFSZ-bufcnt, file);
+
+		bufcur=buf;
+
+		while(SKIP(*bufcur)) {
+			++bufcur;
+			if(--bufcnt<=0) goto fail;
+		}
+
+		switch(*bufcur) {
+		case '#':
+			do {
+				++bufcur;
+				if(--bufcnt<=0) goto fail;
+			} while(*bufcur!=sep);
+			continue;
+		}
+
+		opt=bufcur;
+
+		do {
+			++bufcur;
+			if(--bufcnt<=0) goto fail;
+		} while(isalnum(*bufcur)||*bufcur=='_');
+
+		while(isblank(*bufcur)) {
+			*bufcur++='\0';
+			if(--bufcnt<=0) goto fail;
+		}
+
+		if(*bufcur=='=') {
+			*bufcur='\0';
+
+			val=++bufcur;
+			--bufcnt;
+
+			while(*bufcur!=sep) {
+				++bufcur;
+				if(--bufcnt<=0) goto fail;
+			}
+
+		} else if(*bufcur!=sep) goto fail;
+
+		*(bufcur++)='\0';
+		--bufcnt;
+
+		while(mid=(hi+lo)/2, res=strcmp(opt, options[mid].name)) {
+			if(res<0) hi=mid;
+			else /* if(res>0) */ lo=mid+1;
+			if(lo==hi) goto fail;
+		}
+
+		res=options[mid].func(params, opt, val, options[mid].extra);
+		if(res<0) goto fail;
+
+	} while(bufcnt>0||!feof(file));
+
+
+	return 2;
+
+#undef SKIP
+#undef BUFSZ
+fail:
+	if(buf) free(buf);
+	return -1;
+}
+
+
 /* generic string accepting function */
 static int parse_str(struct params *_params, const char *opt, char *val,
 void *extra)
@@ -225,7 +357,14 @@ void *extra)
 
 	if(!val) return -1; /* indicates no argument */
 
-	params[index]=val;
+	/* we don't own the passed-in memory */
+	if(params[index]) free(params[index]);
+
+	if(!(params[index]=strdup(val))) {
+		fprintf(stderr, "Memory allocation failure, sorry\n");
+
+		return -1;
+	}
 
 	return 2;
 }
@@ -247,6 +386,14 @@ void *extra)
 	if(errno) return -errno;
 
 	return 2;
+}
+
+
+/* for entries which should be ignored */
+static int parse_nop(struct params *params, const char *opt, char *val,
+void *extra)
+{
+	return 1; /* we don't take an argument, someone else can have it */
 }
 
 
@@ -477,7 +624,7 @@ int main(int argc, char **argv)
     void *second_data = NULL;
     void *recovery_dtbo_data = NULL;
     void *dt_data = NULL;
-    int fd;
+    int fd=-1;
     int ret;
 
     memset(&params, 0, sizeof(params));
@@ -501,7 +648,7 @@ int main(int argc, char **argv)
 
         if(strncmp("--", arg, 2)) {
             if(arg[1]=='o'&&arg[2]==0&&argc>=2) {
-                params.output_fn=argv[1];
+                params.output_fn=strdup(argv[1]); /* free() called later */
                 argc-=2;
                 argv+=2;
             } else return usage();
@@ -612,12 +759,25 @@ int main(int argc, char **argv)
     if(params.get_id) {
         print_id((uint8_t *) params.hdr.id, sizeof(params.hdr.id));
     }
-    return 0;
 
+    ret=0;
+
+    while(0) {
 fail:
-    unlink(params.output_fn);
-    close(fd);
-    fprintf(stderr,"error: failed writing '%s': %s\n", params.output_fn,
-            strerror(errno));
-    return 1;
+        unlink(params.output_fn);
+        if(fd>=0) close(fd);
+        fprintf(stderr,"error: failed writing '%s': %s\n", params.output_fn,
+                strerror(errno));
+
+        ret=1;
+    }
+
+    if(params.output_fn) free(params.output_fn);
+    if(params.kernel_fn) free(params.kernel_fn);
+    if(params.ramdisk_fn) free(params.ramdisk_fn);
+    if(params.dt_fn) free(params.dt_fn);
+    if(params.second_fn) free(params.second_fn);
+    if(params.recovery_dtbo_fn) free(params.recovery_dtbo_fn);
+
+    return ret;
 }

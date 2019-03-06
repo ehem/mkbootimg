@@ -30,6 +30,7 @@
 #define OS_PATCH_OPT	"os_patch_level"
 #define OS_VER_OPT	"os_version"
 #define PAGE_OPT	"pagesize"
+#define PARAMS_OPT	"params"
 #define RAMDISK_OPT	"ramdisk"
 #define RAMDISK_OFF_OPT	"ramdisk_offset"
 #define RECOVERY_DT_OPT	"recovery_dtbo"
