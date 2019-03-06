@@ -84,7 +84,6 @@ int usage(void)
     return 1;
 }
 
-static unsigned char padding[131072] = { 0, };
 
 static void print_id(const uint8_t *id, size_t id_len)
 {
@@ -96,22 +95,34 @@ static void print_id(const uint8_t *id, size_t id_len)
     printf("\n");
 }
 
-int write_padding(int fd, unsigned pagesize, unsigned itemsize)
+
+int write_padded(int fd, unsigned pagesize, const void *buf, size_t itemsize)
 {
     unsigned pagemask = pagesize - 1;
     ssize_t count;
+    off_t len;
+
+    if(write(fd, buf, itemsize) != itemsize) return -1;
 
     if((itemsize & pagemask) == 0) {
-        return 0;
+        return itemsize;
     }
 
     count = pagesize - (itemsize & pagemask);
 
-    if(write(fd, padding, count) != count) {
-        return -1;
-    } else {
-        return 0;
-    }
+    /* For the uninitiated: Yes, it is perfectly legal to seek beyond the end
+    ** of file. */
+
+    if((len = lseek(fd, count, SEEK_CUR))<0) return -1;
+
+    /* Yes, it is also perfectly legal to truncate a file to longer than it
+    ** previously was.  This creates a "hole" which is filled with zeros
+    ** (we could simply leave the file pointer here, but if no further data was
+    ** written, the file would be left unpadded). */
+
+    if(ftruncate(fd, len)<0) return -1;
+
+    return itemsize;
 }
 
 int parse_os_version(char *ver)
@@ -448,26 +459,20 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if(write(fd, &hdr, sizeof(hdr)) != sizeof(hdr)) goto fail;
-    if(write_padding(fd, pagesize, sizeof(hdr))) goto fail;
+    if(write_padded(fd, pagesize, &hdr, sizeof(hdr))<=0) goto fail;
 
-    if(write(fd, kernel_data, hdr.kernel_size) != (ssize_t) hdr.kernel_size) goto fail;
-    if(write_padding(fd, pagesize, hdr.kernel_size)) goto fail;
+    if(write_padded(fd, pagesize, kernel_data, hdr.kernel_size)<=0) goto fail;
 
-    if(write(fd, ramdisk_data, hdr.ramdisk_size) != (ssize_t) hdr.ramdisk_size) goto fail;
-    if(write_padding(fd, pagesize, hdr.ramdisk_size)) goto fail;
+    if(write_padded(fd, pagesize, ramdisk_data, hdr.ramdisk_size)<0) goto fail;
 
     if(second_data) {
-        if(write(fd, second_data, hdr.second_size) != (ssize_t) hdr.second_size) goto fail;
-        if(write_padding(fd, pagesize, hdr.second_size)) goto fail;
+        if(write_padded(fd, pagesize, second_data, hdr.second_size)<0) goto fail;
     }
 
     if(dt_data) {
-        if(write(fd, dt_data, hdr.dt_size) != (ssize_t) hdr.dt_size) goto fail;
-        if(write_padding(fd, pagesize, hdr.dt_size)) goto fail;
+        if(write_padded(fd, pagesize, dt_data, hdr.dt_size)<0) goto fail;
     } else if(recovery_dtbo_data) {
-        if(write(fd, recovery_dtbo_data, hdr.recovery_dtbo_size) != (ssize_t) hdr.recovery_dtbo_size) goto fail;
-        if(write_padding(fd, pagesize, hdr.recovery_dtbo_size)) goto fail;
+        if(write_padded(fd, pagesize, recovery_dtbo_data, hdr.recovery_dtbo_size)<0) goto fail;
     }
 
     if(get_id) {
