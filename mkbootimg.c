@@ -519,7 +519,10 @@ int main(int argc, char **argv)
             while(mid=(hi+lo)/2, (res=strncmp(arg+2, options[mid].name, l))||options[mid].name[l]) {
                 if(res<=0) hi=mid;
                 else lo=mid+1;
-                if(lo==hi) return usage();
+                if(lo==hi) {
+                    fprintf(stderr, "Unrecognized option \"%s\"\n", arg);
+                    return usage();
+                }
             }
 
             l=options[mid].func(&params, options[mid].name, val, options[mid].extra);
