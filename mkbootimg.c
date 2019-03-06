@@ -28,34 +28,46 @@
 #include "bootimg.h"
 #include "params.h"
 
-static void *load_file(const char *fn, unsigned *_sz)
+static int load_file(const char *const usage, const char *const fn,
+uint32_t *_sz, void **_data)
 {
-    char *data;
-    int sz;
-    int fd;
+    char *data = NULL;
+    off_t sz = 0;
+    int fd = -1;
 
-    data = 0;
-    fd = open(fn, O_RDONLY);
-    if(fd < 0) return 0;
+    if(fn) {
+        fd = open(fn, O_RDONLY);
+        if(fd < 0) goto oops;
 
-    sz = lseek(fd, 0, SEEK_END);
-    if(sz < 0) goto oops;
+        sz = lseek(fd, 0, SEEK_END);
+        if(sz < 0) goto oops;
 
-    if(lseek(fd, 0, SEEK_SET) != 0) goto oops;
+        if(lseek(fd, 0, SEEK_SET) != 0) goto oops;
 
-    data = (char*) malloc(sz);
-    if(data == 0) goto oops;
+        data = (char*) malloc(sz);
+        if(!data) goto oops;
 
-    if(read(fd, data, sz) != sz) goto oops;
-    close(fd);
+        if(read(fd, data, sz) != sz) goto oops;
+    }
 
-    if(_sz) *_sz = sz;
-    return data;
-
+    while(0) {
 oops:
-    close(fd);
-    if(data != 0) free(data);
-    return 0;
+        if(data) {
+            free(data);
+            data = NULL;
+        }
+
+        fprintf(stderr,"error: could not load %s '%s'\n", usage, fn);
+
+        sz = -1;
+    }
+
+    if(fd>=0) close(fd);
+
+    *_data = data;
+    *_sz = sz;
+
+    return sz;
 }
 
 int usage(void)
@@ -278,6 +290,7 @@ int main(int argc, char **argv)
     uint32_t rec_dtbo_sz    = 0;
     uint64_t rec_dtbo_offset= 0;
     uint32_t header_sz      = 0;
+    int ret;
 
     size_t cmdlen;
     enum hash_alg hash_alg = HASH_SHA1;
@@ -393,49 +406,29 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    kernel_data = load_file(kernel_fn, &kernel_sz);
-    if(kernel_data == 0) {
-        fprintf(stderr,"error: could not load kernel '%s'\n", kernel_fn);
+    if((ret=load_file("kernel", kernel_fn, &kernel_sz, &kernel_data))<=0) {
+        /* unlike most files, kernel is required and even zero is error */
+        if(!ret) fprintf(stderr,"error: could not load kernel '%s'\n", kernel_fn);
         return 1;
     }
     hdr.kernel_size = kernel_sz;
 
-    if(ramdisk_fn == NULL) {
-        ramdisk_data = 0;
-    } else {
-        ramdisk_data = load_file(ramdisk_fn, &ramdisk_sz);
-        if(ramdisk_data == 0) {
-            fprintf(stderr,"error: could not load ramdisk '%s'\n", ramdisk_fn);
-            return 1;
-        }
-    }
+    if(load_file("ramdisk", ramdisk_fn, &ramdisk_sz, &ramdisk_data)<0)
+        return 1;
     hdr.ramdisk_size = ramdisk_sz;
 
-    if(second_fn) {
-        second_data = load_file(second_fn, &second_sz);
-        if(second_data == 0) {
-            fprintf(stderr,"error: could not load secondstage '%s'\n", second_fn);
-            return 1;
-        }
-    }
+    if(load_file("secondstage", second_fn, &second_sz, &second_data)<0)
+        return 1;
     hdr.second_size = second_sz;
 
     if(header_version == 0) {
-        if(dt_fn) {
-            dt_data = load_file(dt_fn, &dt_sz);
-            if(dt_data == 0) {
-                fprintf(stderr,"error: could not load device tree image '%s'\n", dt_fn);
-                return 1;
-            }
-        }
+        if(load_file("device tree image", dt_fn, &dt_sz, &dt_data)<0)
+            return 1;
         hdr.dt_size = dt_sz; /* overrides hdr.header_version */
     } else {
-        if(recovery_dtbo_fn) {
-            recovery_dtbo_data = load_file(recovery_dtbo_fn, &rec_dtbo_sz);
-            if(recovery_dtbo_data == 0) {
-                fprintf(stderr,"error: could not load recovery dtbo image '%s'\n", recovery_dtbo_fn);
+        if((ret=load_file("recovery dtbo image", recovery_dtbo_fn, &rec_dtbo_sz, &recovery_dtbo_data))) {
+            if(ret<0)
                 return 1;
-            }
             /* header occupies a page */
             rec_dtbo_offset = pagesize * (1 + \
                                           (kernel_sz + pagesize - 1) / pagesize + \
