@@ -13,6 +13,8 @@
 ** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
+**
+** Portions Copyright 2019, Elliott Mitchell
 */
 
 
@@ -49,8 +51,6 @@ struct params {
 	char *second_fn;
 	char *recovery_dtbo_fn;
 
-	char *cmdline;
-	char *board;
 	uint32_t base;
 
 	enum hash_alg hash_alg;
@@ -67,7 +67,7 @@ static param_func parse_os_version, parse_os_patch_level;
 
 static param_func parse_pagesize, parse_header_vers;
 
-static param_func parse_hash_alg, get_id_arg_func;
+static param_func parse_cmdline, parse_hash_alg, get_id_arg_func, parse_board;
 
 
 extern struct params *fake_params_ptr;
@@ -80,8 +80,8 @@ struct param_entry {
 	void *extra;
 } options[]={
 	{BASE_OPT,	parse_uint,	PARAMS_UINT_IDX(base)},
-	{BOARD_OPT,	parse_str,	PARAMS_UINT_IDX(board)},
-	{CMDLINE_OPT,	parse_str,	PARAMS_STR_IDX(cmdline)},
+	{BOARD_OPT,	parse_board,	NULL},
+	{CMDLINE_OPT,	parse_cmdline,	NULL},
 	{DT_OPT,	parse_str,	PARAMS_STR_IDX(dt_fn)},
 	{HASH_OPT,	parse_hash_alg,	NULL},
 	{HEADER_VERS_OPT, parse_header_vers, NULL},
@@ -184,8 +184,10 @@ static void print_id(const uint8_t *id, size_t id_len)
 }
 
 
-int write_padded(int fd, unsigned pagesize, const void *buf, size_t itemsize)
+int write_padded(int fd, const struct params *const params, const void *buf,
+size_t itemsize)
 {
+    unsigned pagesize = params->hdr.page_size;
     unsigned pagemask = pagesize - 1;
     ssize_t count;
     off_t len;
@@ -325,6 +327,45 @@ void *extra)
 }
 
 
+static int parse_cmdline(struct params *params, const char *opt, char *cmdline,
+void *extra)
+{
+    size_t cmdlen;
+
+    if(!cmdline) return -1; /* indicates no argument */
+
+    cmdlen = strlen(cmdline);
+    if(cmdlen <= BOOT_ARGS_SIZE) {
+        strcpy((char *)params->hdr.cmdline, cmdline);
+    } else if(cmdlen <= BOOT_ARGS_SIZE + BOOT_EXTRA_ARGS_SIZE) {
+        /* exceeds the limits of the base command-line size, go for the extra */
+        memcpy(params->hdr.cmdline, cmdline, BOOT_ARGS_SIZE);
+        strcpy((char *)params->hdr.extra_cmdline, cmdline+BOOT_ARGS_SIZE);
+    } else {
+        fprintf(stderr,"error: kernel commandline too large\n");
+        return -1;
+    }
+
+    return 2;
+}
+
+
+static int parse_board(struct params *params, const char *opt, char *val,
+void *extra)
+{
+	if(!val) return -1; /* indicates no argument */
+
+	if(strlen(val) >= BOOT_NAME_SIZE) {
+		fprintf(stderr,"error: board name too large\n");
+		return -1;
+	}
+
+	strcpy((char *)params->hdr.name, val);
+
+	return 2;
+}
+
+
 struct hash_name {
     const char *name;
     enum hash_alg alg;
@@ -430,60 +471,31 @@ void generate_id(enum hash_alg alg, boot_img_hdr_v1 *hdr, void *kernel_data,
 int main(int argc, char **argv)
 {
     struct params params;
-    boot_img_hdr_v1 hdr;
+
+    void *kernel_data = NULL;
+    void *ramdisk_data = NULL;
+    void *second_data = NULL;
+    void *recovery_dtbo_data = NULL;
+    void *dt_data = NULL;
+    int fd;
+    int ret;
 
     memset(&params, 0, sizeof(params));
 
-    char *kernel_fn = NULL;
-    void *kernel_data = NULL;
-    char *ramdisk_fn = NULL;
-    void *ramdisk_data = NULL;
-    char *second_fn = NULL;
-    void *second_data = NULL;
-    char *recovery_dtbo_fn = NULL;
-    void *recovery_dtbo_data = NULL;
-    char *cmdline = "";
-    params.cmdline = "";
-    char *bootimg = NULL;
-    char *board = "";
-    params.board = "";
-    int os_version = 0;
-    int os_patch_level = 0;
-    int header_version = 0;
-    char *dt_fn = NULL;
-    void *dt_data = NULL;
-    uint32_t pagesize = 2048;
     params.hdr.page_size = 2048;
-    int fd;
-    uint32_t base           = 0x10000000U;
-    params.base             = 0x10000000U;
-    uint32_t kernel_offset  = 0x00008000U;
-    params.hdr.kernel_addr  = 0x00008000U;
-    uint32_t ramdisk_offset = 0x01000000U;
-    params.hdr.ramdisk_addr = 0x01000000U;
-    uint32_t second_offset  = 0x00f00000U;
-    params.hdr.second_addr  = 0x00f00000U;
-    uint32_t tags_offset    = 0x00000100U;
-    params.hdr.tags_addr    = 0x00000100U;
-    uint32_t kernel_sz      = 0;
-    uint32_t ramdisk_sz     = 0;
-    uint32_t second_sz      = 0;
-    uint32_t dt_sz          = 0;
-    uint32_t rec_dtbo_sz    = 0;
-    uint64_t rec_dtbo_offset= 0;
-    uint32_t header_sz      = 0;
-    int ret;
 
-    size_t cmdlen;
-    enum hash_alg hash_alg = HASH_SHA1;
+    params.base             = 0x10000000U;
+    params.hdr.kernel_addr  = 0x00008000U;
+    params.hdr.ramdisk_addr = 0x01000000U;
+    params.hdr.second_addr  = 0x00f00000U;
+    params.hdr.tags_addr    = 0x00000100U;
+
     params.hash_alg = HASH_SHA1;
 
     argc--;
     argv++;
 
-    memset(&hdr, 0, sizeof(hdr));
-
-    bool get_id = false;
+    params.get_id = false;
     while(argc > 0){
         char *arg = argv[0];
 
@@ -518,185 +530,91 @@ int main(int argc, char **argv)
             argv+=l;
         }
 
-
-#if 0
-        if(!strcmp(arg, "--id")) {
-            get_id = true;
-            argc -= 1;
-            argv += 1;
-        } else if(argc >= 2) {
-            char *val = argv[1];
-            argc -= 2;
-            argv += 2;
-            if(!strcmp(arg, "--output") || !strcmp(arg, "-o")) {
-                bootimg = val;
-            } else if(!strcmp(arg, "--" KERNEL_OPT)) {
-                kernel_fn = val;
-            } else if(!strcmp(arg, "--" RAMDISK_OPT)) {
-                ramdisk_fn = val;
-            } else if(!strcmp(arg, "--" SECOND_OPT)) {
-                second_fn = val;
-            } else if(!strcmp(arg, "--" RECOVERY_DT_OPT)) {
-                recovery_dtbo_fn = val;
-            } else if(!strcmp(arg, "--" CMDLINE_OPT)) {
-                cmdline = val;
-            } else if(!strcmp(arg, "--" BASE_OPT)) {
-                base = strtoul(val, 0, 16);
-            } else if(!strcmp(arg, "--" KERNEL_OFF_OPT)) {
-                kernel_offset = strtoul(val, 0, 16);
-            } else if(!strcmp(arg, "--" RAMDISK_OFF_OPT)) {
-                ramdisk_offset = strtoul(val, 0, 16);
-            } else if(!strcmp(arg, "--" SECOND_OFF_OPT)) {
-                second_offset = strtoul(val, 0, 16);
-            } else if(!strcmp(arg, "--" TAGS_OFF_OPT)) {
-                tags_offset = strtoul(val, 0, 16);
-            } else if(!strcmp(arg, "--" BOARD_OPT)) {
-                board = val;
-            } else if(!strcmp(arg,"--" PAGE_OPT)) {
-                pagesize = strtoul(val, 0, 10);
-                if ((pagesize & (pagesize-1)) || (pagesize < (1<<11))) {
-                    fprintf(stderr,"error: unsupported page size %d\n", pagesize);
-                    return -1;
-                }
-            } else if(!strcmp(arg, "--" DT_OPT)) {
-                dt_fn = val;
-            } else if(!strcmp(arg, "--" OS_VER_OPT)) {
-                os_version = parse_os_version(val);
-            } else if(!strcmp(arg, "--" OS_PATCH_OPT)) {
-                os_patch_level = parse_os_patch_level(val);
-            } else if(!strcmp(arg, "--" HEADER_VERS_OPT)) {
-                header_version = strtoul(val, 0, 10);
-            } else if(!strcmp(arg, "--" HASH_OPT)) {
-                hash_alg = parse_hash_alg(val);
-                if (hash_alg == HASH_UNKNOWN) {
-                    fprintf(stderr, "error: unknown hash algorithm '%s'\n", val);
-                    return -1;
-                }
-            } else {
-                return usage();
-            }
-        } else {
-            return usage();
-        }
-#endif
     }
-    hdr.page_size = pagesize;
-
-    hdr.kernel_addr =  base + kernel_offset;
-    hdr.ramdisk_addr = base + ramdisk_offset;
-    hdr.second_addr =  base + second_offset;
-    hdr.tags_addr =    base + tags_offset;
 
     params.hdr.kernel_addr += params.base;
     params.hdr.ramdisk_addr += params.base;
     params.hdr.second_addr += params.base;
     params.hdr.tags_addr += params.base;
 
-    hdr.os_version = (os_version << 11) | os_patch_level;
-    hdr.header_version = header_version;
-
-    if(bootimg == 0) {
+    if(params.output_fn == 0) {
         fprintf(stderr,"error: no output filename specified\n");
         return usage();
     }
 
-    if(kernel_fn == 0) {
+    if(params.kernel_fn == 0) {
         fprintf(stderr,"error: no kernel image specified\n");
         return usage();
     }
 
-    if(strlen(board) >= BOOT_NAME_SIZE) {
-        fprintf(stderr,"error: board name too large\n");
-        return usage();
-    }
+    memcpy(params.hdr.magic, BOOT_MAGIC, BOOT_MAGIC_SIZE);
 
-    strcpy((char *) hdr.name, board);
-
-    memcpy(hdr.magic, BOOT_MAGIC, BOOT_MAGIC_SIZE);
-
-    cmdlen = strlen(cmdline);
-    if(cmdlen <= BOOT_ARGS_SIZE) {
-        strcpy((char *)hdr.cmdline, cmdline);
-    } else if(cmdlen <= BOOT_ARGS_SIZE + BOOT_EXTRA_ARGS_SIZE) {
-        /* exceeds the limits of the base command-line size, go for the extra */
-        memcpy(hdr.cmdline, cmdline, BOOT_ARGS_SIZE);
-        strcpy((char *)hdr.extra_cmdline, cmdline+BOOT_ARGS_SIZE);
-    } else {
-        fprintf(stderr,"error: kernel commandline too large\n");
+    if((ret=load_file("kernel", params.kernel_fn, &params.hdr.kernel_size, &kernel_data))<=0) {
+        /* unlike most files, kernel is required and zero is error */
+        if(!ret) fprintf(stderr,"error: could not load kernel '%s'\n", params.kernel_fn);
         return 1;
     }
 
-    if((ret=load_file("kernel", kernel_fn, &kernel_sz, &kernel_data))<=0) {
-        /* unlike most files, kernel is required and even zero is error */
-        if(!ret) fprintf(stderr,"error: could not load kernel '%s'\n", kernel_fn);
+    if(load_file("ramdisk", params.ramdisk_fn, &params.hdr.ramdisk_size, &ramdisk_data)<0)
         return 1;
-    }
-    hdr.kernel_size = kernel_sz;
 
-    if(load_file("ramdisk", ramdisk_fn, &ramdisk_sz, &ramdisk_data)<0)
+    if(load_file("secondstage", params.second_fn, &params.hdr.second_size, &second_data)<0)
         return 1;
-    hdr.ramdisk_size = ramdisk_sz;
 
-    if(load_file("secondstage", second_fn, &second_sz, &second_data)<0)
-        return 1;
-    hdr.second_size = second_sz;
 
-    if(header_version == 0) {
-        if(load_file("device tree image", dt_fn, &dt_sz, &dt_data)<0)
+    if(params.hdr.header_version == 0) {
+        if(load_file("device tree image", params.dt_fn, &params.hdr.dt_size, &dt_data)<0)
             return 1;
-        hdr.dt_size = dt_sz; /* overrides hdr.header_version */
+        /* dt_size overrides hdr.header_version ??? */
     } else {
-        if((ret=load_file("recovery dtbo image", recovery_dtbo_fn, &rec_dtbo_sz, &recovery_dtbo_data))) {
+        if((ret=load_file("recovery dtbo image", params.recovery_dtbo_fn, &params.hdr.recovery_dtbo_size, &recovery_dtbo_data))) {
             if(ret<0)
                 return 1;
             /* header occupies a page */
-            rec_dtbo_offset = pagesize * (1 + \
-                                          (kernel_sz + pagesize - 1) / pagesize + \
-                                          (ramdisk_sz + pagesize - 1) / pagesize + \
-                                          (second_sz + pagesize - 1) / pagesize);
+            params.hdr.recovery_dtbo_offset = params.hdr.page_size * (1 + \
+                                          (params.hdr.kernel_size + params.hdr.page_size - 1) / params.hdr.page_size + \
+                                          (params.hdr.ramdisk_size + params.hdr.page_size - 1) / params.hdr.page_size + \
+                                          (params.hdr.second_size + params.hdr.page_size - 1) / params.hdr.page_size);
         }
-        header_sz = sizeof(hdr);
+        params.hdr.header_size = sizeof(params.hdr);
     }
-    hdr.recovery_dtbo_size = rec_dtbo_sz;
-    hdr.recovery_dtbo_offset = rec_dtbo_offset;
-    hdr.header_size = header_sz;
 
     /* put a hash of the contents in the header so boot images can be
      * differentiated based on their first 2k.
      */
-    generate_id(hash_alg, &hdr, kernel_data, ramdisk_data, second_data, dt_data, recovery_dtbo_data);
+    generate_id(params.hash_alg, &params.hdr, kernel_data, ramdisk_data, second_data, dt_data, recovery_dtbo_data);
 
-    fd = open(bootimg, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+    fd = open(params.output_fn, O_CREAT | O_TRUNC | O_WRONLY, 0644);
     if(fd < 0) {
-        fprintf(stderr,"error: could not create '%s'\n", bootimg);
+        fprintf(stderr,"error: could not create '%s'\n", params.output_fn);
         return 1;
     }
 
-    if(write_padded(fd, pagesize, &hdr, sizeof(hdr))<=0) goto fail;
+    if(write_padded(fd, &params, &params.hdr, sizeof(params.hdr))<=0) goto fail;
 
-    if(write_padded(fd, pagesize, kernel_data, hdr.kernel_size)<=0) goto fail;
+    if(write_padded(fd, &params, kernel_data, params.hdr.kernel_size)<=0) goto fail;
 
-    if(write_padded(fd, pagesize, ramdisk_data, hdr.ramdisk_size)<0) goto fail;
+    if(write_padded(fd, &params, ramdisk_data, params.hdr.ramdisk_size)<0) goto fail;
 
     if(second_data) {
-        if(write_padded(fd, pagesize, second_data, hdr.second_size)<0) goto fail;
+        if(write_padded(fd, &params, second_data, params.hdr.second_size)<0) goto fail;
     }
 
     if(dt_data) {
-        if(write_padded(fd, pagesize, dt_data, hdr.dt_size)<0) goto fail;
+        if(write_padded(fd, &params, dt_data, params.hdr.dt_size)<0) goto fail;
     } else if(recovery_dtbo_data) {
-        if(write_padded(fd, pagesize, recovery_dtbo_data, hdr.recovery_dtbo_size)<0) goto fail;
+        if(write_padded(fd, &params, recovery_dtbo_data, params.hdr.recovery_dtbo_size)<0) goto fail;
     }
 
-    if(get_id) {
-        print_id((uint8_t *) hdr.id, sizeof(hdr.id));
+    if(params.get_id) {
+        print_id((uint8_t *) params.hdr.id, sizeof(params.hdr.id));
     }
     return 0;
 
 fail:
-    unlink(bootimg);
+    unlink(params.output_fn);
     close(fd);
-    fprintf(stderr,"error: failed writing '%s': %s\n", bootimg,
+    fprintf(stderr,"error: failed writing '%s': %s\n", params.output_fn,
             strerror(errno));
     return 1;
 }
